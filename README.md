@@ -63,7 +63,7 @@ Windows 系统托盘小工具，监控 Nacos 服务注册中心实例状态，�
 
 | 配置项 | 说明 | 默认值 |
 |---|---|---|
-| IP | Nacos 服务器地址 | `dev.leaderrun.org` |
+| IP | Nacos 服务器地址 | `your-nacos-server.com` |
 | 端口 | Nacos 端口 | `8848` |
 | 命名空间 | Nacos 命名空间 ID | `dev2v` |
 | 用户名 | 登录用户名 | `dev` |

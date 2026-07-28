@@ -25,7 +25,7 @@ def load_config():
         except Exception:
             pass
     return {
-        "ip": "dev.leaderrun.org",
+        "ip": "your-nacos-server.com",
         "port": 8848,
         "username": "dev",
         "password": "1234567",

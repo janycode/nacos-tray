@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller 构建
+build/
+dist/
+
+# 运行时数据（用户配置 / 凭证 / 备注）
+.nacos-tray/
+data/
+
+# 运行时日志
+debug.log
+
+# AI 工具缓存
+.mimocode/

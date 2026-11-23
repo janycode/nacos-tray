@@ -22,9 +22,9 @@ DEFAULT_CARD_FIELDS = {
     "dnd": True,
 }
 DEFAULT_SHORTCUTS = {
-    "refresh": "F5",
-    "toggle_view": "Control-Tab",
-    "open_settings": "Control-comma",
+    "refresh": "<F5>",
+    "toggle_view": "<Control-Tab>",
+    "open_settings": "<Control-comma>",
 }
 
 def _ensure_dir():

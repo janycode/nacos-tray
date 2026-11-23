@@ -78,8 +78,23 @@ def _center_on_screen(window):
 _ICON_FONT = "Segoe MDL2 Assets"
 _ICON_GLYPHS = {
     "settings": "\uE713",
+    "eye": "\uE890",
+    "pin": "\uE718",
+    "unpin": "\uE77A",
+    "info": "\uE946",
 }
 _ICON_FONT_CACHE = []
+
+
+def _normalize_shortcut(sequence):
+    if not isinstance(sequence, str):
+        return ""
+    seq = sequence.strip()
+    if not seq:
+        return ""
+    if not (seq.startswith("<") and seq.endswith(">")):
+        seq = "<" + seq + ">"
+    return seq
 
 
 def _icon_font_available(widget):
@@ -145,6 +160,14 @@ CHANGELOG = [
         "关于页增加作者邮箱",
         "配色预设改为紧凑三列，减少外观页滚动",
         "托盘右键弹窗按钮改为纯文字并移除关闭按钮",
+        "卡片列数选择固定值时强制生效，不再按宽度降列",
+        "重排悬浮详情，实例之间增加间距与分隔",
+        "修复快捷键切换表格/卡片不生效的问题",
+        "连接设置密码支持按住眼睛图标查看",
+        "托盘右键弹窗的置顶服务增加钉标并突出服务名",
+        "悬浮详情改为表格/卡片的信息图标触发，避免与右键菜单冲突",
+        "置顶图标由星标改为钉标",
+        "右键菜单改为跟随应用主题配色",
     ]),
     ("v1.6", "NacosTray_v1.6.exe", [
         "顶部只保留齿轮入口，备注、关于与全部设置统一收进设置面板",
@@ -262,8 +285,7 @@ class SettingsDialog:
         self._shortcut_vars = {}
         for action, default in config.DEFAULT_SHORTCUTS.items():
             value = shortcuts.get(action, default)
-            if not isinstance(value, str):
-                value = default
+            value = _normalize_shortcut(value) or _normalize_shortcut(default)
             self._shortcut_vars[action] = tk.StringVar(value=value)
         self._shortcut_status_var = tk.StringVar(value="")
         self.window = tk.Toplevel(parent)
@@ -639,7 +661,28 @@ class SettingsDialog:
         ttk.Label(conn_group, text="用户名:").grid(row=4, column=0, sticky=tk.W, pady=3)
         ttk.Entry(conn_group, textvariable=self.username_var, width=30).grid(row=4, column=1, sticky=tk.W, pady=3)
         ttk.Label(conn_group, text="密码:").grid(row=5, column=0, sticky=tk.W, pady=3)
-        ttk.Entry(conn_group, textvariable=self.password_var, width=30, show="*").grid(row=5, column=1, sticky=tk.W, pady=3)
+        self.password_entry = ttk.Entry(conn_group, textvariable=self.password_var,
+                                        width=30, show="*")
+        self.password_entry.grid(row=5, column=1, sticky=tk.W, pady=3)
+        use_icon = _icon_font_available(self.window)
+        eye = tk.Label(conn_group,
+                       text=_ICON_GLYPHS["eye"] if use_icon else "显示",
+                       bg=COLORS["bg_main"], fg=COLORS["text_secondary"],
+                       font=(_ICON_FONT, 11) if use_icon else ("Microsoft YaHei UI", 8),
+                       padx=4, cursor="hand2")
+        eye.grid(row=5, column=2, sticky=tk.W, padx=(6, 0))
+
+        def show_password(event=None):
+            self.password_entry.configure(show="")
+            eye.configure(fg=COLORS["primary"])
+
+        def hide_password(event=None):
+            self.password_entry.configure(show="*")
+            eye.configure(fg=COLORS["text_secondary"])
+
+        eye.bind("<ButtonPress-1>", show_password)
+        eye.bind("<ButtonRelease-1>", hide_password)
+        eye.bind("<Leave>", hide_password)
         ttk.Label(page, text="保存后立即重新登录并刷新服务列表",
                   foreground=COLORS["text_secondary"]).pack(anchor=tk.W, pady=(8, 0))
 
@@ -1062,7 +1105,8 @@ class SettingsDialog:
                             for field, var in self._card_field_vars.items()},
             "table_row_height": self._table_row_height_var.get(),
             "table_striped": bool(self._table_striped_var.get()),
-            "shortcuts": {action: var.get() for action, var in self._shortcut_vars.items()},
+            "shortcuts": {action: _normalize_shortcut(var.get())
+                          for action, var in self._shortcut_vars.items()},
         })
         config.save_config(new_cfg)
         config.set_auto_start(new_cfg["auto_start"])
@@ -1128,13 +1172,21 @@ class ServiceListPopup:
                 online_count = sum(1 for i in instances if i["online"])
                 total_count = len(instances)
                 port = instances[0]["port"]
+                pinned = svc_name in (self.app.cfg.get("pinned_services") or [])
                 svc_frame = tk.Frame(list_frame, bg=C["secondary"], padx=8, pady=3)
                 svc_frame.pack(fill=tk.X, pady=(4, 2))
-                tk.Label(svc_frame,
+                head = tk.Frame(svc_frame, bg=C["secondary"])
+                head.pack(fill=tk.X)
+                if pinned:
+                    tk.Label(head, text="📌", bg=C["secondary"], fg=C["primary"],
+                             font=("Microsoft YaHei UI", 10, "bold")).pack(
+                        side=tk.LEFT, padx=(0, 4))
+                tk.Label(head,
                         text=f"{svc_name} ({online_count}/{total_count} 在线) 端口: {port}",
-                        bg=C["secondary"], fg=C["text_primary"],
-                        font=("Microsoft YaHei UI", 9, "bold"),
-                        anchor=tk.W).pack(fill=tk.X)
+                        bg=C["secondary"],
+                        fg=C["primary"] if pinned else C["text_primary"],
+                        font=("Microsoft YaHei UI", 10 if pinned else 9, "bold"),
+                        anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 for inst in instances:
                     display = self.app._get_display_name(inst["ip"])
                     status = "●" if inst["online"] else "○"
@@ -1655,7 +1707,7 @@ class NacosTrayApp:
         striped = bool(self.cfg.get("table_striped", True))
         row_idx = 0
         for svc_name, instances in groups:
-            pin_mark = "★" if svc_name in pins else "☆"
+            pin_mark = "📌" if svc_name in pins else "📍"
             for inst in instances:
                 status = "[在线]" if inst["online"] else "[离线]"
                 if inst["ip"] in self.dnd:
@@ -1667,7 +1719,8 @@ class NacosTrayApp:
                 if striped and row_idx % 2 == 1:
                     tag = (tag, "alt")
                 tree.insert("", "end",
-                            values=(pin_mark, svc_name, display_name, str(inst["port"]), status, last_time),
+                            values=(pin_mark, "ⓘ", svc_name, display_name,
+                                    str(inst["port"]), status, last_time),
                             tags=tag)
                 row_idx += 1
 
@@ -1750,12 +1803,7 @@ class NacosTrayApp:
             return
         self._cancel_hover_job()
         self._hide_tooltip()
-        if self._context_menu:
-            try:
-                self._context_menu.destroy()
-            except Exception:
-                pass
-            self._context_menu = None
+        self._close_context_menu()
         for child in self.root.winfo_children():
             if child.winfo_class() == "Toplevel":
                 continue
@@ -1818,7 +1866,6 @@ class NacosTrayApp:
                                       font=("Microsoft YaHei UI", 9),
                                       anchor=tk.W)
         self._status_label.pack(side=tk.LEFT, padx=(4, 0))
-        self._build_context_menu()
         self._bind_shortcuts()
         self.root.bind("<MouseWheel>", self._on_cards_wheel)
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
@@ -1863,9 +1910,12 @@ class NacosTrayApp:
         self._shortcut_sequences = []
         shortcuts = self.cfg.get("shortcuts") or {}
         bindings = [
-            (shortcuts.get("refresh", "F5"), self._on_refresh_click),
-            (shortcuts.get("toggle_view", "Control-Tab"), self._toggle_view_mode),
-            (shortcuts.get("open_settings", "Control-comma"), self._on_settings_click),
+            (_normalize_shortcut(shortcuts.get("refresh", config.DEFAULT_SHORTCUTS["refresh"])),
+             self._on_refresh_click),
+            (_normalize_shortcut(shortcuts.get("toggle_view", config.DEFAULT_SHORTCUTS["toggle_view"])),
+             self._toggle_view_mode),
+            (_normalize_shortcut(shortcuts.get("open_settings", config.DEFAULT_SHORTCUTS["open_settings"])),
+             self._on_settings_click),
         ]
         for sequence, command in bindings:
             if not sequence:
@@ -1902,20 +1952,22 @@ class NacosTrayApp:
         import tkinter as tk
         from tkinter import ttk
         list_frame = self._list_frame
-        columns = ("pin", "service", "instance", "port", "status", "last_online")
+        columns = ("pin", "info", "service", "instance", "port", "status", "last_online")
         tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         tree.heading("pin", text="置顶")
+        tree.heading("info", text="信息")
         tree.heading("service", text="服务名")
         tree.heading("instance", text="实例")
         tree.heading("port", text="端口")
         tree.heading("status", text="状态")
         tree.heading("last_online", text="最近上线时间")
-        tree.column("pin", width=46, anchor=tk.CENTER, stretch=False)
-        tree.column("service", width=170)
-        tree.column("instance", width=190)
-        tree.column("port", width=55, anchor=tk.CENTER)
-        tree.column("status", width=75, anchor=tk.CENTER)
-        tree.column("last_online", width=165)
+        tree.column("pin", width=40, anchor=tk.CENTER, stretch=False)
+        tree.column("info", width=38, anchor=tk.CENTER, stretch=False)
+        tree.column("service", width=150)
+        tree.column("instance", width=170)
+        tree.column("port", width=50, anchor=tk.CENTER)
+        tree.column("status", width=70, anchor=tk.CENTER)
+        tree.column("last_online", width=150)
         tree.tag_configure("online", foreground=COLORS["online"])
         tree.tag_configure("offline", foreground=COLORS["offline"])
         tree.tag_configure("alt", background=COLORS["bg_row_alt"])
@@ -1966,8 +2018,8 @@ class NacosTrayApp:
                 try:
                     cols = int(setting)
                 except (TypeError, ValueError):
-                    cols = 3
-                cols = max(1, min(3, min(cols, fit)))
+                    cols = 1
+                cols = max(1, min(3, cols))
             compact = (event.width // max(1, cols)) < 340
             changed = cols != self._card_cols or compact != self._cards_compact
             self._card_cols = cols
@@ -2006,10 +2058,20 @@ class NacosTrayApp:
                          font=("Microsoft YaHei UI", self._card_name_size(), "bold"), anchor=tk.W,
                          justify=tk.LEFT, wraplength=300)
         title.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        star = tk.Label(head, text="☆", bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
-                        font=("Microsoft YaHei UI", 11), cursor="hand2", padx=4)
-        star.pack(side=tk.RIGHT)
-        star.bind("<Button-1>", lambda e, n=svc_name: self._toggle_pin(n))
+        use_icon = _icon_font_available(self.root)
+        info = tk.Label(head, text=_ICON_GLYPHS["info"] if use_icon else "ⓘ",
+                        bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+                        font=(_ICON_FONT, 11) if use_icon else ("Microsoft YaHei UI", 10),
+                        cursor="hand2", padx=4)
+        pin = tk.Label(head, text=_ICON_GLYPHS["unpin"] if use_icon else "📍",
+                       bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+                       font=(_ICON_FONT, 11) if use_icon else ("Microsoft YaHei UI", 10),
+                       cursor="hand2", padx=4)
+        pin.pack(side=tk.RIGHT)
+        info.pack(side=tk.RIGHT, padx=(0, 6))
+        pin.bind("<Button-1>", lambda e, n=svc_name: self._toggle_pin(n))
+        info.bind("<Enter>", lambda e, n=svc_name, w=info: self._schedule_service_tooltip(n, w))
+        info.bind("<Leave>", lambda e: self._hide_tooltip())
         sub = tk.Label(card, text="", bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
                        font=("Microsoft YaHei UI", 8), anchor=tk.W,
                        justify=tk.LEFT, wraplength=300)
@@ -2018,12 +2080,13 @@ class NacosTrayApp:
         line.pack(fill=tk.X, padx=10)
         rows = tk.Frame(card, bg=COLORS["bg_card"])
         rows.pack(fill=tk.X, padx=2, pady=(2, 8))
-        state = {"frame": card, "star": star, "sub": sub, "line": line, "rows": rows,
+        state = {"frame": card, "pin": pin, "pin_on": _ICON_GLYPHS["pin"] if use_icon else "📌",
+                 "pin_off": _ICON_GLYPHS["unpin"] if use_icon else "📍",
+                 "sub": sub, "line": line, "rows": rows,
                  "rows_map": {}, "order": [], "sub_visible": True}
         self._card_states[svc_name] = state
-        for w in (card, head, title, sub, line, rows, star):
+        for w in (card, head, title, sub, line, rows, pin, info):
             w.bind("<Button-3>", lambda e, n=svc_name: self._show_card_context_menu(e, n, None))
-            self._bind_card_hover(w, svc_name, card)
         return state
 
     def _create_card_row(self, state, svc_name, inst):
@@ -2043,7 +2106,6 @@ class NacosTrayApp:
         for w in (row, dot, name, when):
             w.bind("<Button-1>", lambda e, rs=row_state: self._confirm_toggle_instance(rs["svc"]))
             w.bind("<Button-3>", lambda e, n=svc_name, rs=row_state: self._show_card_context_menu(e, n, rs["svc"]))
-            self._bind_card_hover(w, svc_name, state["frame"])
         return row_state
 
     def _sync_card(self, svc_name, instances):
@@ -2051,8 +2113,8 @@ class NacosTrayApp:
         state = self._ensure_card(svc_name)
         pins = self.cfg.get("pinned_services") or []
         pinned = svc_name in pins
-        state["star"].configure(text="★" if pinned else "☆",
-                                fg=COLORS["primary"] if pinned else COLORS["text_secondary"])
+        state["pin"].configure(text=state["pin_on"] if pinned else state["pin_off"],
+                               fg=COLORS["primary"] if pinned else COLORS["text_secondary"])
         total = len(instances)
         online = sum(1 for i in instances if i["online"])
         port = instances[0]["port"] if instances else "-"
@@ -2139,24 +2201,39 @@ class NacosTrayApp:
             else:
                 self._cards_empty.grid()
 
+    def _tree_cell_at(self, event, column_id):
+        tree = self._service_tree
+        if not tree:
+            return None
+        item = tree.identify_row(event.y)
+        if not item:
+            return None
+        box = tree.bbox(item, column_id)
+        if not box:
+            return None
+        x, y, width, height = box
+        if x <= event.x <= x + width and y <= event.y <= y + height:
+            return item
+        return None
+
     def _on_tree_motion(self, event):
         tree = self._service_tree
         if not tree:
             return
-        item = tree.identify_row(event.y)
+        item = self._tree_cell_at(event, "#2")
+        if not item:
+            if self._hover_table_item is not None:
+                self._hover_table_item = None
+                self._hide_tooltip()
+            return
         if item == self._hover_table_item:
             return
         self._hover_table_item = item
-        if not item:
-            self._cancel_hover_job()
-            self._hide_tooltip()
-            return
         values = tree.item(item, "values")
-        if len(values) < 2:
-            self._cancel_hover_job()
+        if len(values) < 3:
             self._hide_tooltip()
             return
-        svc_name = str(values[1])
+        svc_name = str(values[2])
         if svc_name == self._hover_service:
             return
         self._hide_tooltip()
@@ -2166,12 +2243,6 @@ class NacosTrayApp:
         self._hover_table_item = None
         self._cancel_hover_job()
         self._hide_tooltip()
-
-    def _bind_card_hover(self, widget, svc_name, anchor):
-        widget.bind("<Enter>",
-                    lambda e, n=svc_name, a=anchor: self._schedule_service_tooltip(n, a),
-                    add="+")
-        widget.bind("<Leave>", lambda e, a=anchor: self._leave_hover(a), add="+")
 
     def _pointer_in_widget(self, widget):
         try:
@@ -2185,12 +2256,6 @@ class NacosTrayApp:
         self._cancel_hover_job()
         self._hover_service = svc_name
         self._hover_job = self.root.after(400, lambda: self._show_service_tooltip(svc_name, anchor))
-
-    def _leave_hover(self, anchor):
-        if self._pointer_in_widget(anchor):
-            return
-        self._cancel_hover_job()
-        self._hide_tooltip()
 
     def _cancel_hover_job(self):
         if self._hover_job:
@@ -2252,7 +2317,6 @@ class NacosTrayApp:
             tk.Label(inner, text="还有 " + str(total - 12) + " 个实例",
                      bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
                      font=("Microsoft YaHei UI", 8), anchor=tk.W).pack(fill=tk.X, pady=(4, 0))
-        tk.Frame(inner, bg=COLORS["separator"], height=1).pack(fill=tk.X, pady=(6, 4))
         context = ("Nacos " + str(self.cfg.get("ip", "-")) + ":" + str(self.cfg.get("port", 8848))
                    + " · 命名空间 " + (self.cfg.get("namespace") or "默认")
                    + " · 集群 " + (self.cfg.get("cluster_name") or "-"))
@@ -2260,7 +2324,7 @@ class NacosTrayApp:
             context += " · 更新 " + self._last_refresh_time
         tk.Label(inner, text=context, bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
                  font=("Microsoft YaHei UI", 8), anchor=tk.W,
-                 justify=tk.LEFT, wraplength=420).pack(fill=tk.X)
+                 justify=tk.LEFT, wraplength=420).pack(fill=tk.X, pady=(4, 0))
         top.update_idletasks()
         width = top.winfo_reqwidth()
         height = top.winfo_reqheight()
@@ -2281,8 +2345,10 @@ class NacosTrayApp:
         import tkinter as tk
         online = inst["online"]
         color = COLORS["online"] if online else COLORS["offline"]
-        row = tk.Frame(parent, bg=COLORS["bg_card"])
-        row.pack(fill=tk.X, pady=(0, 3))
+        block = tk.Frame(parent, bg=COLORS["bg_card"])
+        block.pack(fill=tk.X, pady=(0, 6))
+        row = tk.Frame(block, bg=COLORS["bg_card"])
+        row.pack(fill=tk.X)
         tk.Label(row, text="●", bg=COLORS["bg_card"], fg=color,
                  font=("Microsoft YaHei UI", 8)).pack(side=tk.LEFT)
         ip_text = inst["ip"] + ":" + str(inst["port"])
@@ -2294,35 +2360,39 @@ class NacosTrayApp:
         if inst["ip"] in self.dnd:
             tk.Label(row, text="免打扰", bg=COLORS["bg_card"], fg=COLORS["warning"],
                      font=("Microsoft YaHei UI", 8)).pack(side=tk.RIGHT)
-        states = []
+        details = []
         if not inst.get("enabled", True):
-            states.append("已禁用")
+            details.append("已禁用")
         elif not inst.get("healthy", True):
-            states.append("不健康")
+            details.append("不健康")
         else:
-            states.append("在线" if online else "离线")
+            details.append("在线" if online else "离线")
         last_key = inst["service_name"] + ":" + inst["ip"] + ":" + str(inst["port"])
-        states.append("最近上线 " + self._last_online_time.get(last_key, "-"))
+        details.append("最近上线 " + self._last_online_time.get(last_key, "-"))
         weight = inst.get("weight")
         if weight is not None:
-            states.append("权重 " + str(weight))
+            details.append("权重 " + str(weight))
         cluster = inst.get("cluster_name")
         if cluster:
-            states.append("集群 " + str(cluster))
+            details.append("集群 " + str(cluster))
         ephemeral = inst.get("ephemeral")
         if ephemeral is not None:
-            states.append("临时实例" if ephemeral else "持久实例")
+            details.append("临时实例" if ephemeral else "持久实例")
+        tk.Label(block, text=" · ".join(details), bg=COLORS["bg_card"],
+                 fg=COLORS["text_secondary"], font=("Microsoft YaHei UI", 8),
+                 anchor=tk.W, justify=tk.LEFT, wraplength=420).pack(
+            fill=tk.X, padx=(12, 0), pady=(2, 0))
         metadata = inst.get("metadata") or {}
         if isinstance(metadata, dict) and metadata:
             items = list(metadata.items())[:6]
             meta_text = ", ".join(str(k) + "=" + str(v) for k, v in items)
             if len(metadata) > 6:
                 meta_text += ", ..."
-            states.append("元数据 " + meta_text)
-        tk.Label(parent, text=" · ".join(states), bg=COLORS["bg_card"],
-                 fg=COLORS["text_secondary"], font=("Microsoft YaHei UI", 8),
-                 anchor=tk.W, justify=tk.LEFT, wraplength=420).pack(
-            fill=tk.X, padx=(12, 0), pady=(0, 4))
+            tk.Label(block, text="元数据 " + meta_text, bg=COLORS["bg_card"],
+                     fg=COLORS["text_secondary"], font=("Microsoft YaHei UI", 8),
+                     anchor=tk.W, justify=tk.LEFT, wraplength=420).pack(
+                fill=tk.X, padx=(12, 0), pady=(2, 0))
+        tk.Frame(block, bg=COLORS["separator"], height=1).pack(fill=tk.X, pady=(6, 0))
 
     def _confirm_toggle_instance(self, svc):
         if not svc:
@@ -2354,58 +2424,84 @@ class NacosTrayApp:
             canvas.yview_scroll(int(-event.delta / 120), "units")
             return "break"
 
-    def _build_context_menu(self):
-        import tkinter as tk
-        self._context_menu = tk.Menu(self.root, tearoff=0)
-        self._context_menu.add_command(label="上线", command=self._ctx_online)
-        self._context_menu.add_command(label="下线", command=self._ctx_offline)
-        self._context_menu.add_separator()
-        self._context_menu.add_command(label="置顶服务", command=self._ctx_toggle_pin)
-        self._context_menu.add_command(label="管理备注...", command=self._ctx_set_note)
-        self._context_menu.add_separator()
-        self._context_menu.add_command(label="免打扰", command=self._ctx_toggle_dnd)
-        self._context_menu.add_command(label="刷新", command=self._on_refresh_click)
+    def _close_context_menu(self):
+        if self._context_menu:
+            try:
+                self._context_menu.destroy()
+            except Exception:
+                pass
+            self._context_menu = None
 
-    def _prepare_context_menu(self, svc_name, svc):
+    def _show_card_context_menu(self, event, svc_name, svc):
+        self._open_context_menu(svc_name, svc, event.x_root, event.y_root)
+
+    def _open_context_menu(self, svc_name, svc, x_root, y_root):
         import tkinter as tk
+        self._hide_tooltip()
+        self._close_context_menu()
         self._menu_service = svc
         self._menu_service_name = svc_name
         pins = self.cfg.get("pinned_services") or []
-        self._context_menu.entryconfigure(3, label="取消置顶" if svc_name in pins else "置顶服务")
-        state = tk.NORMAL if svc else tk.DISABLED
-        self._context_menu.entryconfigure(0, state=state)
-        self._context_menu.entryconfigure(1, state=state)
-        if svc:
-            label = "取消免打扰" if svc["ip"] in self.dnd else "免打扰"
-            self._context_menu.entryconfigure(6, label=label, state=tk.NORMAL)
-        else:
-            self._context_menu.entryconfigure(6, label="免打扰", state=tk.DISABLED)
+        items = [
+            ("上线", self._ctx_online, bool(svc and not svc["online"])),
+            ("下线", self._ctx_offline, bool(svc and svc["online"])),
+            None,
+            ("取消置顶" if svc_name in pins else "置顶服务", self._ctx_toggle_pin, True),
+            ("管理备注...", self._ctx_set_note, True),
+            None,
+            (("取消免打扰" if svc["ip"] in self.dnd else "免打扰") if svc else "免打扰",
+             self._ctx_toggle_dnd, bool(svc)),
+            ("刷新", self._on_refresh_click, True),
+        ]
+        top = tk.Toplevel(self.root)
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        top.configure(bg=COLORS["separator"])
+        outer = tk.Frame(top, bg=COLORS["bg_card"])
+        outer.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        for item in items:
+            if item is None:
+                tk.Frame(outer, bg=COLORS["separator"], height=1).pack(
+                    fill=tk.X, padx=8, pady=4)
+                continue
+            text, command, enabled = item
+            label = tk.Label(outer, text=text, bg=COLORS["bg_card"],
+                             fg=COLORS["text_primary"] if enabled else COLORS["text_secondary"],
+                             font=("Microsoft YaHei UI", 9), anchor=tk.W,
+                             padx=18, pady=6, cursor="hand2" if enabled else "arrow")
+            label.pack(fill=tk.X)
+            if enabled:
+                label.bind("<Enter>", lambda e, w=label: w.configure(
+                    bg=COLORS["primary"], fg=COLORS["header_text"]))
+                label.bind("<Leave>", lambda e, w=label: w.configure(
+                    bg=COLORS["bg_card"], fg=COLORS["text_primary"]))
+                label.bind("<Button-1>", lambda e, c=command: self._run_menu_command(c))
+        top.update_idletasks()
+        width = top.winfo_reqwidth()
+        height = top.winfo_reqheight()
+        screen_w = top.winfo_screenwidth()
+        screen_h = top.winfo_screenheight()
+        x = min(x_root, screen_w - width - 6)
+        y = min(y_root, screen_h - height - 6)
+        top.geometry("+" + str(max(0, x)) + "+" + str(max(0, y)))
+        top.bind("<FocusOut>", lambda e: self._close_context_menu())
+        top.bind("<Escape>", lambda e: self._close_context_menu())
+        self._context_menu = top
+        top.focus_force()
 
-    def _show_card_context_menu(self, event, svc_name, svc):
-        if not self._context_menu:
-            return
-        self._prepare_context_menu(svc_name, svc)
-        try:
-            self._context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._context_menu.grab_release()
+    def _run_menu_command(self, command):
+        self._close_context_menu()
+        command()
 
     def _on_tree_click(self, event):
-        tree = self._service_tree
-        if not tree:
-            return
-        if tree.identify_region(event.x, event.y) != "cell":
-            return
-        if tree.identify_column(event.x) != "#1":
-            return
-        item = tree.identify_row(event.y)
+        item = self._tree_cell_at(event, "#1")
         if not item:
             return
-        values = tree.item(item, "values")
-        if len(values) < 2:
+        values = self._service_tree.item(item, "values")
+        if len(values) < 3:
             return
-        tree.selection_set(item)
-        self._toggle_pin(str(values[1]))
+        self._service_tree.selection_set(item)
+        self._toggle_pin(str(values[2]))
         return "break"
 
     def _toggle_pin(self, svc_name):
@@ -2437,14 +2533,13 @@ class NacosTrayApp:
         self.root.withdraw()
 
     def _show_context_menu(self, event):
+        item = self._service_tree.identify_row(event.y)
+        if item:
+            self._service_tree.selection_set(item)
         svc = self._get_selected_service()
         if not svc:
             return
-        self._prepare_context_menu(svc["service_name"], svc)
-        try:
-            self._context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._context_menu.grab_release()
+        self._open_context_menu(svc["service_name"], svc, event.x_root, event.y_root)
 
     def _get_selected_service(self):
         if not self._service_tree:
@@ -2453,11 +2548,11 @@ class NacosTrayApp:
         if not selection:
             return None
         values = self._service_tree.item(selection[0])["values"]
-        if not values or len(values) < 5:
+        if not values or len(values) < 7:
             return None
-        svc_name = values[1]
-        instance_text = values[2]
-        port = int(values[3])
+        svc_name = values[2]
+        instance_text = values[3]
+        port = int(values[4])
         for svc in self.services:
             if svc["service_name"] == svc_name and svc["port"] == port:
                 display = self._get_display_name(svc["ip"])
@@ -2496,7 +2591,7 @@ class NacosTrayApp:
         self._update_window()
 
     def _on_double_click(self, event):
-        if self._service_tree.identify_column(event.x) == "#1":
+        if self._tree_cell_at(event, "#1") or self._tree_cell_at(event, "#2"):
             return "break"
         svc = self._get_selected_service()
         if svc:

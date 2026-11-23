@@ -295,6 +295,7 @@ def build_palette(cfg):
     palette["header_fg"] = header_fg
     palette["header_hover_bg"] = header_hover
     palette["selection_bg"] = blend(palette["bg_card"], palette["primary"], 0.18)
+    palette["bg_hover"] = blend(palette["bg_card"], palette["primary"], 0.10)
     return palette
 
 

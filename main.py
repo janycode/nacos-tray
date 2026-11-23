@@ -9,6 +9,7 @@ import json
 import traceback
 import ctypes
 import ctypes.wintypes
+import tkinter as tk
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +18,7 @@ import config
 import theme as theme_mod
 from nacos_client import NacosClient
 
-APP_VERSION = "v1.7"
+APP_VERSION = "v1.8"
 
 try:
     from tray_v2 import TrayIcon, NIIF_INFO, NIIF_WARNING, NIIF_ERROR
@@ -82,6 +83,8 @@ _ICON_GLYPHS = {
     "pin": "\uE718",
     "unpin": "\uE77A",
     "info": "\uE946",
+    "play": "\uE768",
+    "pause": "\uE769",
 }
 _ICON_FONT_CACHE = []
 
@@ -152,6 +155,16 @@ CARD_FIELD_LABELS = [
     ("dnd", "免打扰标记"),
 ]
 CHANGELOG = [
+    ("v1.8", "NacosTray_v1.8.exe", [
+        "卡片实例行悬停时显示互斥的快捷上线/下线按钮",
+        "快捷操作点击后立即执行并静默刷新服务列表",
+        "实例行悬停增加浅底色，卡片悬停增加强调色边框",
+        "托盘右键弹窗实例行增加同样的快捷上下线图标",
+        "卡片快捷上下线只保留图标，悬停图标显示边框高亮",
+        "主界面滚动条改为跟随主题的 6px 细滚动条",
+        "快捷上下线处理中显示动态省略号，鼠标移出仍保留到刷新完成",
+        "刷新进度条改为固定细线，不再改变窗口高度",
+    ]),
     ("v1.7", "NacosTray_v1.7.exe", [
         "卡片服务名字号可在外观设置中调整，支持小/标准/大/特大",
         "悬浮详情同时支持表格与卡片，靠近屏幕右侧时自动翻到左侧",
@@ -208,6 +221,100 @@ CHANGELOG = [
         "一键上线、一键下线",
     ]),
 ]
+
+
+class ThinScrollbar(tk.Canvas):
+    """跟随主题的 6px 细滚动条"""
+
+    def __init__(self, parent, target):
+        super().__init__(parent, width=6, bg=COLORS["bg_main"],
+                         highlightthickness=0, bd=0)
+        self._target = target
+        self._first = 0.0
+        self._last = 1.0
+        self._dragging = False
+        self._drag_offset = 0
+        self._hover = False
+        self.bind("<Configure>", lambda e: self._redraw())
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_motion)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<MouseWheel>", self._on_wheel)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+
+    def set(self, first, last):
+        try:
+            self._first = float(first)
+            self._last = float(last)
+        except (TypeError, ValueError):
+            return
+        self._redraw()
+
+    def _thumb_range(self):
+        height = self.winfo_height()
+        if height <= 1:
+            return None
+        span = max(0.0, min(1.0, self._last - self._first))
+        if span <= 0:
+            return None
+        thumb_height = max(20, int(height * span))
+        top = int(self._first * height)
+        top = max(0, min(height - thumb_height, top))
+        return top, top + thumb_height
+
+    def _redraw(self, hover=None):
+        if hover is not None:
+            self._hover = hover
+        self.delete("thumb")
+        if self._last - self._first >= 0.999:
+            return
+        bounds = self._thumb_range()
+        if not bounds:
+            return
+        top, bottom = bounds
+        if self._hover or self._dragging:
+            color = COLORS["primary"]
+        else:
+            color = theme_mod.blend(COLORS["bg_main"], COLORS["text_primary"], 0.28)
+        self.create_rectangle(1, top, 5, bottom, fill=color, outline="", tags="thumb")
+
+    def _on_enter(self, event=None):
+        self._redraw(hover=True)
+
+    def _on_leave(self, event=None):
+        self._redraw(hover=False)
+
+    def _on_press(self, event):
+        bounds = self._thumb_range()
+        if not bounds:
+            return
+        top, bottom = bounds
+        if top <= event.y <= bottom:
+            self._dragging = True
+            self._drag_offset = event.y - top
+        else:
+            height = self.winfo_height()
+            if height > 1:
+                self._target.yview_moveto(max(0.0, min(1.0, event.y / height)))
+        self._redraw()
+
+    def _on_motion(self, event):
+        if not self._dragging:
+            return
+        height = self.winfo_height()
+        if height > 1:
+            self._target.yview_moveto(
+                max(0.0, min(1.0, (event.y - self._drag_offset) / height)))
+
+    def _on_release(self, event=None):
+        self._dragging = False
+        self._redraw()
+
+    def _on_wheel(self, event):
+        if event.delta:
+            self._target.yview_scroll(int(-event.delta / 120) * 3, "units")
+            return "break"
 
 
 class SettingsDialog:
@@ -1131,6 +1238,7 @@ class ServiceListPopup:
     def _build(self):
         import tkinter as tk
         C = COLORS
+        use_icon = _icon_font_available(self.parent)
         services = self.app.services
         self.window = tk.Toplevel(self.parent)
         self.window.overrideredirect(True)
@@ -1189,17 +1297,63 @@ class ServiceListPopup:
                         anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 for inst in instances:
                     display = self.app._get_display_name(inst["ip"])
-                    status = "●" if inst["online"] else "○"
                     tag = "online" if inst["online"] else "offline"
-                    lbl = tk.Label(list_frame,
-                                  text=f"  {status} {display}",
-                                  bg=C["bg_card"], fg=C[tag],
-                                  font=("Consolas", 9), anchor=tk.W,
-                                  cursor="hand2", padx=8)
-                    lbl.pack(fill=tk.X)
-                    lbl.bind("<Button-1>", lambda e, s=inst: self._on_service_click(s))
-                    lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=C["secondary"]))
-                    lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=C["bg_card"]))
+                    action_color = C["offline"] if inst["online"] else C["online"]
+                    if use_icon:
+                        action_glyph = _ICON_GLYPHS["pause"] if inst["online"] else _ICON_GLYPHS["play"]
+                    else:
+                        action_glyph = "⏸" if inst["online"] else "▶"
+                    row = tk.Frame(list_frame, bg=C["bg_card"], cursor="hand2")
+                    row.pack(fill=tk.X)
+                    dot = tk.Label(row, text="●" if inst["online"] else "○",
+                                   bg=C["bg_card"], fg=C[tag],
+                                   font=("Consolas", 9), width=2, anchor=tk.W,
+                                   cursor="hand2")
+                    dot.pack(side=tk.LEFT, padx=(8, 0))
+                    name = tk.Label(row, text=display, bg=C["bg_card"], fg=C[tag],
+                                    font=("Consolas", 9), anchor=tk.W, cursor="hand2")
+                    name.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    action = tk.Label(row, text=action_glyph, bg=C["bg_card"],
+                                      fg=action_color,
+                                      font=(_ICON_FONT, 9) if use_icon else ("Microsoft YaHei UI", 9),
+                                      cursor="hand2", padx=6, bd=0,
+                                      highlightthickness=1,
+                                      highlightbackground=C["bg_card"])
+                    action.pack(side=tk.RIGHT, padx=(4, 8))
+                    widgets = (row, dot, name, action)
+
+                    def paint(color, ws=widgets):
+                        for widget in ws:
+                            try:
+                                widget.configure(bg=color)
+                            except Exception:
+                                pass
+
+                    def on_enter(event, p=paint, a=action):
+                        p(C["secondary"])
+                        a.configure(highlightbackground=C["secondary"])
+
+                    def on_leave(event, p=paint, r=row, a=action):
+                        try:
+                            x, y = self.parent.winfo_pointerxy()
+                            if (r.winfo_rootx() <= x <= r.winfo_rootx() + r.winfo_width()
+                                    and r.winfo_rooty() <= y <= r.winfo_rooty() + r.winfo_height()):
+                                return
+                        except Exception:
+                            pass
+                        p(C["bg_card"])
+                        a.configure(highlightbackground=C["bg_card"])
+
+                    for widget in widgets:
+                        widget.bind("<Enter>", on_enter)
+                        widget.bind("<Leave>", on_leave)
+                    for widget in (row, dot, name):
+                        widget.bind("<Button-1>", lambda e, s=inst: self._on_service_click(s))
+                    action.bind("<Button-1>", lambda e, s=inst: self._on_quick_action(s))
+                    action.bind("<Enter>", lambda e, a=action: a.configure(
+                        highlightbackground=C["primary"]), add="+")
+                    action.bind("<Leave>", lambda e, a=action, r=row: self._restore_action_border(a, r),
+                                add="+")
         btn_frame = tk.Frame(outer, bg=C["header_bg"])
         btn_frame.pack(fill=tk.X)
         btns = [
@@ -1254,6 +1408,20 @@ class ServiceListPopup:
             else:
                 self.app._bring_online(service)
         self.window.attributes('-topmost', True)
+
+    def _restore_action_border(self, action, row):
+        try:
+            x, y = self.parent.winfo_pointerxy()
+            inside = (row.winfo_rootx() <= x <= row.winfo_rootx() + row.winfo_width()
+                      and row.winfo_rooty() <= y <= row.winfo_rooty() + row.winfo_height())
+        except Exception:
+            inside = False
+        action.configure(
+            highlightbackground=COLORS["secondary"] if inside else COLORS["bg_card"])
+
+    def _on_quick_action(self, service):
+        self._destroy()
+        self.app._quick_toggle_instance(service)
 
     def _on_restore(self):
         self._destroy()
@@ -1325,6 +1493,13 @@ class NacosTrayApp:
         self._hover_service = None
         self._hover_table_item = None
         self._cards_compact = False
+        self._quick_pending = set()
+        self._pending_dots_job = None
+        self._pending_dot_phase = 0
+        self._progress_canvas = None
+        self._progress_active = False
+        self._progress_job = None
+        self._progress_pos = 0
         self._system_light = theme_mod.system_uses_light()
         COLORS.clear()
         COLORS.update(theme_mod.build_palette(self.cfg))
@@ -1747,15 +1922,50 @@ class NacosTrayApp:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _show_progress(self):
-        import tkinter as tk
-        if hasattr(self, "_progress_bar") and self._progress_bar:
-            self._progress_bar.pack(fill=tk.X, padx=16, pady=(2, 0), before=self._progress_before)
-            self._progress_bar.start(10)
+        if not self._progress_canvas or self._progress_active:
+            return
+        self._progress_active = True
+        self._progress_pos = 0
+        self._animate_progress()
 
     def _hide_progress(self):
-        if hasattr(self, "_progress_bar") and self._progress_bar:
-            self._progress_bar.stop()
-            self._progress_bar.pack_forget()
+        self._progress_active = False
+        if self._progress_job:
+            try:
+                self.root.after_cancel(self._progress_job)
+            except Exception:
+                pass
+            self._progress_job = None
+        if self._progress_canvas:
+            try:
+                self._progress_canvas.delete("bar")
+            except Exception:
+                pass
+
+    def _animate_progress(self):
+        self._progress_job = None
+        if not self._progress_active or not self._progress_canvas:
+            return
+        try:
+            if not self._progress_canvas.winfo_exists():
+                return
+            width = self._progress_canvas.winfo_width()
+            if width <= 1:
+                width = 600
+            bar_width = max(60, width // 4)
+            self._progress_canvas.delete("bar")
+            self._progress_canvas.create_rectangle(
+                self._progress_pos, 0, self._progress_pos + bar_width, 2,
+                fill=COLORS["primary"], outline="", tags="bar")
+            self._progress_pos += max(6, width // 48)
+            if self._progress_pos > width:
+                self._progress_pos = -bar_width
+        except Exception:
+            return
+        try:
+            self._progress_job = self.root.after(30, self._animate_progress)
+        except Exception:
+            self._progress_job = None
 
     def _on_poll_data(self, services):
         if not self.running:
@@ -1839,9 +2049,12 @@ class NacosTrayApp:
         gear.bind("<Button-1>", lambda e: self._on_settings_click())
         gear.bind("<Enter>", lambda e, w=gear: w.configure(bg=COLORS["header_hover_bg"]))
         gear.bind("<Leave>", lambda e, w=gear: w.configure(bg=COLORS["header_bg"]))
-        tk.Frame(main_frame, bg=COLORS["separator"], height=1).pack(fill=tk.X)
-        self._progress_bar = ttk.Progressbar(main_frame, mode="indeterminate")
-        self._progress_before = search_frame = tk.Frame(main_frame, bg=COLORS["bg_main"])
+        self._hide_progress()
+        self._progress_canvas = tk.Canvas(main_frame, height=2, bg=COLORS["separator"],
+                                          highlightthickness=0, bd=0)
+        self._progress_canvas.pack(fill=tk.X)
+        self._progress_pos = 0
+        search_frame = tk.Frame(main_frame, bg=COLORS["bg_main"])
         search_frame.pack(fill=tk.X, padx=16, pady=(6, 4))
         tk.Label(search_frame, text="🔍", bg=COLORS["bg_main"],
                 fg=COLORS["text_secondary"],
@@ -1971,7 +2184,7 @@ class NacosTrayApp:
         tree.tag_configure("online", foreground=COLORS["online"])
         tree.tag_configure("offline", foreground=COLORS["offline"])
         tree.tag_configure("alt", background=COLORS["bg_row_alt"])
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar = ThinScrollbar(list_frame, tree)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1988,7 +2201,7 @@ class NacosTrayApp:
         list_frame = self._list_frame
         canvas = tk.Canvas(list_frame, bg=COLORS["bg_main"], highlightthickness=0, bd=0,
                            yscrollincrement=20)
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollbar = ThinScrollbar(list_frame, canvas)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(4, 0))
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -2087,10 +2300,12 @@ class NacosTrayApp:
         self._card_states[svc_name] = state
         for w in (card, head, title, sub, line, rows, pin, info):
             w.bind("<Button-3>", lambda e, n=svc_name: self._show_card_context_menu(e, n, None))
+            self._bind_card_border_hover(w, card)
         return state
 
     def _create_card_row(self, state, svc_name, inst):
         import tkinter as tk
+        use_icon = _icon_font_available(self.root)
         row = tk.Frame(state["rows"], bg=COLORS["bg_card"], cursor="hand2")
         dot = tk.Label(row, text="●", bg=COLORS["bg_card"], font=("Microsoft YaHei UI", 8), width=2)
         dot.pack(side=tk.LEFT)
@@ -2099,13 +2314,29 @@ class NacosTrayApp:
         name.pack(side=tk.LEFT, fill=tk.X, expand=True)
         when = tk.Label(row, text="", bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
                         font=("Microsoft YaHei UI", 8), anchor=tk.E)
-        when.pack(side=tk.RIGHT, padx=(6, 8))
+        icon_font = (_ICON_FONT, 8) if use_icon else ("Microsoft YaHei UI", 8)
+        pending_font = ("Microsoft YaHei UI", 9, "bold")
+        action = tk.Label(row, text="", bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+                          font=icon_font, padx=4, pady=0, cursor="hand2", bd=0,
+                          highlightthickness=1, highlightbackground=COLORS["bg_card"])
         row.pack(fill=tk.X, pady=1)
-        row_state = {"row": row, "dot": dot, "name": name, "when": when, "svc": inst,
-                     "when_visible": True}
+        row_state = {"row": row, "dot": dot, "name": name, "when": when,
+                     "action": action, "svc": inst,
+                     "when_visible": False, "action_visible": False,
+                     "hovered": False, "action_hovered": False,
+                     "show_when": True, "use_icon": use_icon,
+                     "icon_font": icon_font, "pending_font": pending_font}
+        for w in (row, dot, name, when, action):
+            w.bind("<Enter>", lambda e, rs=row_state: self._row_enter(rs), add="+")
+            w.bind("<Leave>", lambda e, rs=row_state: self._row_leave(rs), add="+")
+            self._bind_card_border_hover(w, state["frame"])
         for w in (row, dot, name, when):
             w.bind("<Button-1>", lambda e, rs=row_state: self._confirm_toggle_instance(rs["svc"]))
             w.bind("<Button-3>", lambda e, n=svc_name, rs=row_state: self._show_card_context_menu(e, n, rs["svc"]))
+        action.bind("<Button-1>", lambda e, rs=row_state: self._quick_toggle_instance(rs["svc"]))
+        action.bind("<Button-3>", lambda e, n=svc_name, rs=row_state: self._show_card_context_menu(e, n, rs["svc"]))
+        action.bind("<Enter>", lambda e, rs=row_state: self._action_enter(rs), add="+")
+        action.bind("<Leave>", lambda e, rs=row_state: self._action_leave(rs), add="+")
         return row_state
 
     def _sync_card(self, svc_name, instances):
@@ -2155,8 +2386,92 @@ class NacosTrayApp:
                     row["row"].pack_forget()
                     row["row"].pack(fill=tk.X, pady=1)
 
+    def _paint_card_row(self, row, color):
+        for widget in (row["row"], row["dot"], row["name"], row["when"], row["action"]):
+            widget.configure(bg=color)
+        if not row["action_hovered"]:
+            row["action"].configure(highlightbackground=color)
+
+    def _row_enter(self, row):
+        if row["hovered"]:
+            return
+        row["hovered"] = True
+        self._paint_card_row(row, COLORS["bg_hover"])
+        self._update_row_right(row, True)
+
+    def _row_leave(self, row):
+        if self._pointer_in_widget(row["row"]):
+            return
+        if not row["hovered"]:
+            return
+        row["hovered"] = False
+        self._paint_card_row(row, COLORS["bg_card"])
+        self._update_row_right(row, False)
+
+    def _action_enter(self, row):
+        row["action_hovered"] = True
+        row["action"].configure(highlightbackground=COLORS["primary"])
+
+    def _action_leave(self, row):
+        row["action_hovered"] = False
+        color = COLORS["bg_hover"] if row["hovered"] else COLORS["bg_card"]
+        row["action"].configure(highlightbackground=color)
+
+    def _row_key(self, row):
+        svc = row.get("svc") or {}
+        return (svc.get("service_name", "") + ":" + svc.get("ip", "")
+                + ":" + str(svc.get("port", "")))
+
+    def _ensure_pending_animation(self):
+        if self._pending_dots_job is None:
+            self._pending_dot_phase = 0
+            self._pending_dots_job = self.root.after(300, self._animate_pending_dots)
+
+    def _animate_pending_dots(self):
+        self._pending_dots_job = None
+        if not self._quick_pending or not self.root:
+            return
+        self._pending_dot_phase = (self._pending_dot_phase + 1) % 3
+        dots = "." * (self._pending_dot_phase + 1)
+        for state in list(self._card_states.values()):
+            for row in list(state.get("rows_map", {}).values()):
+                if self._row_key(row) in self._quick_pending:
+                    try:
+                        row["action"].configure(text=dots)
+                    except Exception:
+                        pass
+        try:
+            self._pending_dots_job = self.root.after(300, self._animate_pending_dots)
+        except Exception:
+            self._pending_dots_job = None
+
+    def _update_row_right(self, row, hovered):
+        when = row["when"]
+        action = row["action"]
+        pending = self._row_key(row) in self._quick_pending
+        if hovered or pending:
+            if row["when_visible"]:
+                when.pack_forget()
+                row["when_visible"] = False
+            if not row["action_visible"]:
+                action.place(relx=1.0, rely=0.5, anchor=tk.E, x=-8)
+                row["action_visible"] = True
+            if not row["action_hovered"]:
+                color = COLORS["bg_hover"] if hovered else COLORS["bg_card"]
+                action.configure(highlightbackground=color)
+            return
+        if row["action_visible"]:
+            action.place_forget()
+            row["action_visible"] = False
+        if row["show_when"]:
+            if not row["when_visible"]:
+                when.pack(side=tk.RIGHT, padx=(6, 8))
+                row["when_visible"] = True
+        elif row["when_visible"]:
+            when.pack_forget()
+            row["when_visible"] = False
+
     def _update_card_row(self, row, inst, fields=None):
-        import tkinter as tk
         if fields is None:
             fields = self._card_fields()
         online = inst["online"]
@@ -2167,16 +2482,105 @@ class NacosTrayApp:
         if fields["dnd"] and inst["ip"] in self.dnd:
             display = "[勿扰] " + display
         row["name"].configure(text=display, fg=color)
-        show_when = fields["last_online"] and not self._cards_compact
-        if show_when:
-            last_key = inst["service_name"] + ":" + inst["ip"] + ":" + str(inst["port"])
-            row["when"].configure(text=self._last_online_time.get(last_key, "-"))
-            if not row["when_visible"]:
-                row["when"].pack(side=tk.RIGHT, padx=(6, 8))
-                row["when_visible"] = True
-        elif row["when_visible"]:
-            row["when"].pack_forget()
-            row["when_visible"] = False
+        row["show_when"] = fields["last_online"] and not self._cards_compact
+        last_key = inst["service_name"] + ":" + inst["ip"] + ":" + str(inst["port"])
+        row["when"].configure(text=self._last_online_time.get(last_key, "-"))
+        busy = last_key in self._quick_pending
+        if busy:
+            row["action"].configure(
+                text="." * (self._pending_dot_phase + 1),
+                fg=COLORS["primary"], font=row["pending_font"], width=3,
+                cursor="arrow")
+        else:
+            if online:
+                icon = _ICON_GLYPHS["pause"] if row["use_icon"] else "⏸"
+                action_color = COLORS["offline"]
+            else:
+                icon = _ICON_GLYPHS["play"] if row["use_icon"] else "▶"
+                action_color = COLORS["online"]
+            row["action"].configure(text=icon, fg=action_color,
+                                    font=row["icon_font"], width=0,
+                                    cursor="hand2")
+        self._update_row_right(row, row["hovered"])
+
+    def _bind_card_border_hover(self, widget, card):
+        widget.bind("<Enter>", lambda e, c=card: self._card_border_enter(c), add="+")
+        widget.bind("<Leave>", lambda e, c=card: self._card_border_leave(c), add="+")
+
+    def _card_border_enter(self, card):
+        try:
+            card.configure(highlightbackground=COLORS["primary"])
+        except Exception:
+            pass
+
+    def _card_border_leave(self, card):
+        if self._pointer_in_widget(card):
+            return
+        try:
+            card.configure(highlightbackground=COLORS["separator"])
+        except Exception:
+            pass
+
+    def _quick_toggle_instance(self, inst):
+        if not inst:
+            return
+        key = inst["service_name"] + ":" + inst["ip"] + ":" + str(inst["port"])
+        if key in self._quick_pending:
+            return
+        self._quick_pending.add(key)
+        self._ensure_pending_animation()
+        self._hide_tooltip()
+        self._update_window()
+        target_enabled = not inst["online"]
+
+        def worker():
+            error = None
+            services = None
+            try:
+                if not self._ensure_login():
+                    raise RuntimeError("未连接到 Nacos")
+                self.client.update_instance_status(
+                    inst["service_name"], inst["ip"], inst["port"],
+                    enabled=target_enabled)
+                services = self._fetch_services()
+            except Exception as exc:
+                error = str(exc)
+            if self.root and self.running:
+                try:
+                    self.root.after(0, self._on_quick_action_done, key, services, error)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_quick_action_done(self, key, services, error):
+        self._quick_pending.discard(key)
+        if not self._quick_pending and self._pending_dots_job:
+            try:
+                self.root.after_cancel(self._pending_dots_job)
+            except Exception:
+                pass
+            self._pending_dots_job = None
+        if error:
+            if self.tray:
+                self.tray.show_balloon("快捷操作失败", error, NIIF_ERROR)
+        elif services:
+            self._last_refresh_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            with self._lock:
+                self.services = services
+                new_map = {}
+                for svc in services:
+                    svc_key = svc["service_name"] + ":" + svc["ip"] + ":" + str(svc["port"])
+                    new_map[svc_key] = svc
+                    if svc["online"] and svc_key not in self._last_online_time:
+                        self._last_online_time[svc_key] = time.strftime("%Y-%m-%d %H:%M:%S")
+                self.previous_services = new_map
+            try:
+                self._update_tray_tooltip()
+                self._build_menu()
+            except Exception:
+                pass
+        self._update_window()
 
     def _update_cards(self, groups, search_lower=""):
         if not self._cards_frame:

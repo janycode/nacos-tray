@@ -37,6 +37,7 @@ pyinstaller --onefile --console --name NacosTray_v2 --add-data "nacos.ico;." mai
 | `nacos_client.py` | Nacos **v3** Open API 客户端（`/v3/...`）。仅用 `urllib`。token 生命周期 20 分钟，硬编码于 line 47。403 时自动重登。 |
 | `tray.py` | Win32 API 实现系统托盘。**隐藏窗口 + 守护线程 `GetMessageW` 消息循环。** |
 | `tray_v2.py` | Win32 API 实现系统托盘。**用 tkinter 主窗口的 `winfo_id()` 作 hwnd + `PeekMessageW` 由 `tkinter.after()` 轮询。** |
+| `theme.py` | 主题模块。8 套亮暗配色预设、自定义配色派生、系统明暗检测（每 5 秒读注册表）、ttk 样式、DWM 暗色标题栏。 |
 | `config.py` | 读写 `data/config.json` 和 `data/notes.json`。管理 `HKCU\...\Run` 开机自启。配置路径相对于脚本文件（line 8）。 |
 | `settings_gui.ps1` | 设置对话框（PowerShell Windows Forms）。子进程启动。 |
 | `notes_gui.ps1` | IP 备注管理（PowerShell Windows Forms）。子进程启动。 |
@@ -52,7 +53,22 @@ pyinstaller --onefile --console --name NacosTray_v2 --add-data "nacos.ico;." mai
 - **设置/备注对话框**: 通过 `CREATE_NEW_CONSOLE` 启动 PowerShell 子进程 — 即发即忘。
 - **`data/` 目录**: 存放 `config.json` 和 `notes.json`。首次保存时自动创建。配置路径硬编码相对于脚本文件位置。
 - **无测试、无 lint、无 CI** — 独立桌面工具。
+- **主题**: 配置项 `theme_mode` / `theme_preset` / `theme_custom` / `theme_custom_accent`；`COLORS` 是运行时可变字典，切换主题会重建主窗口内容并重开已打开的子窗口，设置窗口原地重建。
 
 ## 构建/调试脚本
 
 `_write_main.py` / `_write_cs.py` / `_write_tray.py` / `_update_nacos.py` / `_update_tray.py` / `_fix.py` / `_fix2.py` 是代码生成和修补脚本（通过字符串拼接生成源文件）。不属于应用本身 — 仅在需要重新生成时运行。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as local markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, default strings, recorded as `Status:` lines. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

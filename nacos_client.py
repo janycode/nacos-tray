@@ -6,23 +6,41 @@ import urllib.parse
 import urllib.error
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+_LOG_ENABLED = True
+_MAX_RETRY = 2
+_INSTANCE_WORKERS = 8
+_REQUEST_INTERVAL = 0.3
 
 
 def log(msg):
+    if not _LOG_ENABLED:
+        return
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[Nacos {timestamp}] {msg}")
 
 
+def set_log_enabled(enabled):
+    global _LOG_ENABLED
+    _LOG_ENABLED = enabled
+
+
 class NacosClient:
-    def __init__(self, ip, port=8848, username="nacos", password="nacos", namespace=""):
+    def __init__(self, ip, port=8848, username="nacos", password="nacos", namespace="",
+                 cluster_name="ShenZhen"):
         self.ip = ip
         self.port = port
         self.username = username
         self.password = password
         self.namespace = namespace
+        self.cluster_name = cluster_name
         self.base_url = f"http://{ip}:{port}/v3"
         self.token = None
         self.token_expire_time = 0
+        self._request_lock = threading.Lock()
+        self._last_request_time = 0.0
 
     def is_token_valid(self):
         return self.token is not None and time.time() < self.token_expire_time
@@ -44,8 +62,9 @@ class NacosClient:
                 log(f"Login response body: {resp_body}")
                 result = json.loads(resp_body)
                 self.token = result.get("accessToken", "")
-                self.token_expire_time = time.time() + 1200
-                log(f"Token obtained: {self.token[:30]}...")
+                expire_seconds = result.get("tokenTtl", 1200)
+                self.token_expire_time = time.time() + int(expire_seconds)
+                log(f"Token obtained: {self.token[:30]}... (TTL: {expire_seconds}s)")
                 return True
         except Exception as e:
             log(f"Login failed: {e}")
@@ -64,7 +83,7 @@ class NacosClient:
             req.add_header("accessToken", self.token)
             req.add_header("authorization", f"Bearer {self.token}")
 
-    def _request(self, method, path, params=None, data=None, content_type=None):
+    def _request(self, method, path, params=None, data=None, content_type=None, _retry_count=0):
         url = f"{self.base_url}{path}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
@@ -91,7 +110,13 @@ class NacosClient:
         if content_type:
             req.add_header("Content-Type", content_type)
         log(f"  Headers: accessToken={self.token[:20] if self.token else "None"}...")
-        
+
+        with self._request_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < _REQUEST_INTERVAL:
+                time.sleep(_REQUEST_INTERVAL - elapsed)
+            self._last_request_time = time.time()
+
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 resp_body = resp.read().decode("utf-8")
@@ -105,11 +130,11 @@ class NacosClient:
             except:
                 pass
             log(f"HTTP Error {e.code}: {error_body[:500]}")
-            if e.code in (403, 500):
-                log("Re-logging in and retrying...")
+            if e.code in (401, 403, 500) and _retry_count < _MAX_RETRY:
+                log(f"Re-logging in and retrying... (attempt {_retry_count + 1}/{_MAX_RETRY})")
                 self.token = None
                 if self.login():
-                    return self._request(method, path, params, data, content_type)
+                    return self._request(method, path, params, data, content_type, _retry_count + 1)
             raise
         except Exception:
             raise
@@ -128,7 +153,9 @@ class NacosClient:
             params["namespaceId"] = self.namespace
         return self._request("GET", "/console/ns/service/list", params=params)
 
-    def get_instance_list(self, service_name, group_name="DEFAULT_GROUP", cluster_name="ShenZhen"):
+    def get_instance_list(self, service_name, group_name="DEFAULT_GROUP", cluster_name=None):
+        if cluster_name is None:
+            cluster_name = self.cluster_name
         log(f"=== Getting instances for {service_name} ===")
         params = {
             "serviceName": service_name,
@@ -142,8 +169,10 @@ class NacosClient:
         return self._request("GET", "/console/ns/instance/list", params=params)
 
     def update_instance_status(self, service_name, ip, port, enabled=True,
-                              cluster_name="ShenZhen", group_name="DEFAULT_GROUP",
+                              cluster_name=None, group_name="DEFAULT_GROUP",
                               ephemeral=True, weight=1, metadata=None):
+        if cluster_name is None:
+            cluster_name = self.cluster_name
         log(f"=== Updating instance status: {service_name} {ip}:{port} enabled={enabled} ===")
         params = {
             "serviceName": service_name,
@@ -169,22 +198,38 @@ class NacosClient:
         services = service_list_data.get("data", {}).get("pageItems", [])
         log(f"Found {len(services)} services")
         result = []
-        for item in services:
+        if not services:
+            return result
+
+        def _fetch_instances(item):
+            service_name = item.get("name", "")
             try:
-                service_name = item.get("name", "")
                 instance_data = self.get_instance_list(service_name)
                 hosts = instance_data.get("data", {}).get("pageItems", [])
                 log(f"  {service_name}: {len(hosts)} instances")
+                partial = []
                 for host in hosts:
-                    result.append({
-                        "service_name": item.get("name", ""),
+                    partial.append({
+                        "service_name": service_name,
                         "ip": host.get("ip", ""),
                         "port": host.get("port", 0),
                         "enabled": host.get("enabled", True),
                         "healthy": host.get("healthy", True),
                         "online": host.get("enabled", True) and host.get("healthy", True),
+                        "weight": host.get("weight", 1),
+                        "cluster_name": host.get("clusterName", ""),
+                        "ephemeral": host.get("ephemeral", None),
+                        "metadata": host.get("metadata") or {},
                     })
+                return partial
             except Exception as e:
                 print(f"Get {service_name} instances failed: {e}")
+                return []
+
+        with ThreadPoolExecutor(max_workers=min(_INSTANCE_WORKERS, len(services))) as executor:
+            futures = {executor.submit(_fetch_instances, item): item for item in services}
+            for future in as_completed(futures):
+                result.extend(future.result() or [])
+
         log(f"Total: {len(result)} instances")
         return result

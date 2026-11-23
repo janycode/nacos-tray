@@ -1,6 +1,12 @@
 import ast
 import os
+import sys
 from pathlib import Path
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 ROOT = Path(__file__).resolve().parents[2]
 TAG = os.environ.get("GITHUB_REF_NAME", "").strip()

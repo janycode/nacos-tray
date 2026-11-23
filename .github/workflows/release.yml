@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build executable
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $name = "NacosTray_$tag"
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name $name `
+            --icon nacos.ico `
+            --add-data "nacos.ico;." `
+            main.py
+
+      - name: Generate release notes
+        run: python .github/scripts/release_notes.py
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exe = "dist/NacosTray_$tag.exe"
+          gh release create $tag $exe --title $tag --notes-file release-notes.md

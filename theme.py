@@ -1,6 +1,8 @@
 # theme.py - 明暗主题：配色预设、自定义派生、系统检测、ttk 样式与标题栏
 import ctypes
 import re
+import sys
+import time
 
 MODE_SYSTEM = "system"
 MODE_LIGHT = "light"
@@ -9,7 +11,28 @@ MODE_OPTIONS = [(MODE_SYSTEM, "跟随系统"), (MODE_LIGHT, "亮色"), (MODE_DAR
 
 CUSTOM_ID = "custom"
 CUSTOM_NAME = "自定义"
-DEFAULT_PRESET = "qinglan"
+DEFAULT_PRESET = "daozai"
+
+# 外观骨架标度：圆角、间距、字号与图标尺寸档位（所有配色预设共用）
+RADIUS_CONTROL = 8
+RADIUS_CARD = 12
+RADIUS_MENU = 12
+RADIUS_FLOAT = 16
+RADIUS_TOOLTIP = 10
+RADIUS_BUBBLE = 12
+SPACING_SCALE = (4, 8, 12, 16)
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_SIZES = {"metric": 20, "title": 12, "body": 10, "secondary": 9, "micro": 8}
+ICON_SIZE_TIERS = (11, 13, 16)
+
+# 入场过渡参数（毫秒）
+ANIMATE_STEP_MS = 16
+MENU_FADE_MS = 120
+POPUP_FADE_MS = 140
+TOOLTIP_DELAY_MS = 200
+TOOLTIP_FADE_MS = 100
+BUBBLE_FADE_MS = 150
+BUBBLE_DURATION_MS = 11000
 DEFAULT_CUSTOM = {"light": "#F0F8FF", "dark": "#2B2B2B"}
 
 # 状态色只区分明暗，不随预设变化
@@ -139,9 +162,24 @@ PRESETS = {
             "separator": "#262626", "header_text": "#0B0B0B",
         },
     },
+    "daozai": {
+        "name": "岛仔风",
+        "light": {
+            "primary": "#D63A3F", "primary_dark": "#BC3035", "primary_darker": "#9E282C",
+            "secondary": "#EFE6D8", "bg_main": "#F7F2E9", "bg_card": "#FFFDF7",
+            "bg_row_alt": "#F0E9DC", "text_primary": "#22201E", "text_secondary": "#6E6960",
+            "separator": "#E6DCCC", "header_text": "#FFFFFF",
+        },
+        "dark": {
+            "primary": "#E5484D", "primary_dark": "#C93E43", "primary_darker": "#A93337",
+            "secondary": "#23272D", "bg_main": "#0B0D10", "bg_card": "#15181D",
+            "bg_row_alt": "#191D23", "text_primary": "#EDEFF2", "text_secondary": "#98A1AB",
+            "separator": "#25292F", "header_text": "#FFFFFF",
+        },
+    },
 }
 
-PRESET_ORDER = ["qinglan", "haiLan", "huiLu", "mihuang", "dousha", "shimo", "wuye", "chunhei"]
+PRESET_ORDER = ["daozai", "qinglan", "haiLan", "huiLu", "mihuang", "dousha", "shimo", "wuye", "chunhei"]
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -266,15 +304,10 @@ def _custom_palette(cfg, mode):
 
 
 def _header_tokens(palette):
-    """顶部条取色：亮色用强调色填充，暗色用深色表面加强调色文字"""
-    if palette["mode"] == MODE_DARK:
-        header_bg = palette["bg_card"]
-        header_fg = ensure_contrast(palette["primary"], header_bg, 4.5)
-        header_hover = palette["secondary"]
-    else:
-        header_bg = palette["primary"]
-        header_fg = palette["header_text"]
-        header_hover = palette["primary_dark"]
+    """顶部条取色：以表面色为底，文字用主文字色，强调色只用于选中项与动作"""
+    header_bg = palette["bg_card"]
+    header_fg = ensure_contrast(palette["text_primary"], header_bg, 4.5)
+    header_hover = palette["secondary"]
     return header_bg, header_fg, header_hover
 
 
@@ -318,7 +351,7 @@ def apply_ttk_style(root, palette, row_height=28):
     sep = palette["separator"]
     primary = palette["primary"]
     header_text = palette["header_text"]
-    font = ("Microsoft YaHei UI", 9)
+    base_font = font("secondary")
 
     if not dark and "vista" in style.theme_names():
         style.theme_use("vista")
@@ -367,10 +400,11 @@ def apply_ttk_style(root, palette, row_height=28):
         root.option_add("*TCombobox*Listbox.selectForeground", header_text)
 
     style.configure("Treeview", background=card, fieldbackground=card, foreground=text,
-                    font=font, rowheight=row_height, bordercolor=sep, lightcolor=card, darkcolor=card)
-    style.configure("Treeview.Heading", background=sub, foreground=text,
-                    font=("Microsoft YaHei UI", 9, "bold"), relief="flat", bordercolor=sep,
-                    lightcolor=sub, darkcolor=sub)
+                    font=base_font, rowheight=row_height, bordercolor=sep, lightcolor=card, darkcolor=card)
+    heading_bg = palette["bg_row_alt"]
+    style.configure("Treeview.Heading", background=heading_bg, foreground=text,
+                    font=(FONT_FAMILY, FONT_SIZES["secondary"], "bold"), relief="flat",
+                    bordercolor=sep, lightcolor=heading_bg, darkcolor=heading_bg)
     style.map("Treeview",
               background=[("selected", palette["selection_bg"])],
               foreground=[])
@@ -390,3 +424,163 @@ def set_dark_titlebar(window, dark):
     except Exception:
         pass
     return False
+
+
+# ---------- 外观骨架公共能力 ----------
+
+_TRANSPARENT_BASE = "#010203"
+
+
+def transparent_key(palette=None):
+    """浮层抠色专用色：避开调色板里的表面色，主题切换不产生杂边"""
+    base = _TRANSPARENT_BASE
+    if not palette:
+        return base
+    used = set()
+    for value in palette.values():
+        if isinstance(value, str) and value.startswith("#"):
+            used.add(value.upper())
+    if base not in used:
+        return base
+    red = 1
+    while red < 256:
+        candidate = "#%02X0203" % red
+        if candidate not in used:
+            return candidate
+        red += 1
+    return base
+
+
+def ease_out_cubic(ratio):
+    """0 到 1 的 ease-out cubic 缓动"""
+    ratio = max(0.0, min(1.0, ratio))
+    return 1 - (1 - ratio) ** 3
+
+
+def animate_alpha(window, target, duration_ms, step_ms=None, on_frame=None):
+    """把窗口透明度补间到目标值；时长为 0 或系统要求减少动画时直接落值。
+
+    on_frame 可选，每帧回传已缓动的进度（0 到 1），供调用方同步做位移等效果。
+    """
+    if duration_ms <= 0 or system_reduces_motion():
+        try:
+            window.attributes("-alpha", float(target))
+        except Exception:
+            pass
+        if on_frame is not None:
+            try:
+                on_frame(1.0)
+            except Exception:
+                pass
+        return
+    step_ms = step_ms or ANIMATE_STEP_MS
+    try:
+        start = float(window.attributes("-alpha"))
+    except Exception:
+        start = 0.0
+    begun = time.time()
+
+    def _step():
+        try:
+            if not window.winfo_exists():
+                return
+        except Exception:
+            return
+        elapsed = (time.time() - begun) * 1000.0
+        ratio = min(elapsed / float(duration_ms), 1.0)
+        eased = ease_out_cubic(ratio)
+        value = start + (float(target) - start) * eased
+        try:
+            window.attributes("-alpha", value)
+        except Exception:
+            return
+        if on_frame is not None:
+            try:
+                on_frame(eased)
+            except Exception:
+                pass
+        if ratio < 1.0:
+            try:
+                window._alpha_anim_job = window.after(step_ms, _step)
+            except Exception:
+                pass
+        else:
+            try:
+                window._alpha_anim_job = None
+            except Exception:
+                pass
+
+    _step()
+
+
+def stop_alpha(window):
+    """取消进行中的透明度补间，避免多次入场互相踩踏"""
+    job = getattr(window, "_alpha_anim_job", None)
+    if job is None:
+        return
+    try:
+        window.after_cancel(job)
+    except Exception:
+        pass
+    try:
+        window._alpha_anim_job = None
+    except Exception:
+        pass
+
+
+def rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
+    """在 Canvas 上绘制圆角矩形，供各浮层复用"""
+    points = [
+        x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+        x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+        x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, splinesteps=24, **kwargs)
+
+
+def font(size_key, bold=False):
+    """按字号档位生成字体元组；size_key 传整数时按原值使用"""
+    size = FONT_SIZES.get(size_key, size_key)
+    return (FONT_FAMILY, size, "bold" if bold else "normal")
+
+
+def system_reduces_motion():
+    """读取系统「减少动画」设置，失败按不减少处理"""
+    try:
+        value = ctypes.c_int()
+        if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(value), 0):
+            return not bool(value.value)
+    except Exception:
+        pass
+    return False
+
+
+def windows_build():
+    try:
+        return int(sys.getwindowsversion().build)
+    except Exception:
+        return 0
+
+
+def is_win11_or_newer():
+    return windows_build() >= 22000
+
+
+_DWMWA_SYSTEMBACKDROP_TYPE = 38
+_DWMSBT_MICA = 2
+_DWMSBT_ACRYLIC = 3
+
+
+def set_frosted_glass(window, enabled=True, acrylic=False):
+    """Windows 11 浮层毛玻璃背板；不支持或调用失败时静默返回 False"""
+    if not enabled or not is_win11_or_newer():
+        return False
+    try:
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
+        value = ctypes.c_int(_DWMSBT_ACRYLIC if acrylic else _DWMSBT_MICA)
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(value), ctypes.sizeof(value)
+        )
+        return result == 0
+    except Exception:
+        return False

@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $name = "NacosTray_$tag"
+          $name = "TrayNotify_$tag"
           pyinstaller --noconfirm --clean --onefile --windowed `
             --name $name `
             --icon nacos.ico `
@@ -46,5 +46,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $exe = "dist/NacosTray_$tag.exe"
+          $exe = "dist/TrayNotify_$tag.exe"
           gh release create $tag $exe --title $tag --notes-file release-notes.md

@@ -8,6 +8,7 @@ dist/
 
 # 运行时数据（用户配置 / 凭证 / 备注）
 .nacos-tray/
+.tray-notify/
 data/
 
 # 运行时日志

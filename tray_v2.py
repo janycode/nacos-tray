@@ -71,6 +71,33 @@ class NOTIFYICONDATA(ctypes.Structure):
     ]
 
 
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class NOTIFYICONIDENTIFIER(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("hWnd", ctypes.c_void_p),
+        ("uID", ctypes.c_uint32),
+        ("guidItem", GUID),
+    ]
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
 class MSG(ctypes.Structure):
     _fields_ = [
         ("hwnd", ctypes.c_void_p),
@@ -106,9 +133,9 @@ class WNDCLASSEX(ctypes.Structure):
 class TrayIcon:
     """System tray icon - uses dedicated hidden message window"""
 
-    _class_name = "NacosTrayMessageWindow"
+    _class_name = "TrayNotifyMessageWindow"
 
-    def __init__(self, tooltip="Nacos Tray", tk_root=None):
+    def __init__(self, tooltip="Tray Notify Tool", tk_root=None):
         self.tooltip = tooltip
         self.tk_root = tk_root
         self.hwnd = None
@@ -162,7 +189,7 @@ class TrayIcon:
         hwnd = user32.CreateWindowExW(
             WS_EX_TOOLWINDOW,
             self._class_name,
-            "NacosTrayMsg",
+            "TrayNotifyMsg",
             0,
             CW_USEDEFAULT, CW_USEDEFAULT, 0, 0,
             None, None, hinst, None
@@ -170,15 +197,12 @@ class TrayIcon:
         return hwnd
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
-        import sys
         try:
             if msg == WM_TRAYICON:
-                print("[TRAY] msg=WM_TRAYICON lparam=0x%04X" % lparam, flush=True)
                 if lparam == WM_RBUTTONUP:
                     self._show_context_menu()
                     return 0
                 elif lparam == WM_LBUTTONDBLCLK:
-                    print("[TRAY] double_click detected, callback:", self.callbacks.get("double_click"))
                     if "double_click" in self.callbacks and self.tk_root:
                         self.tk_root.after(0, self.callbacks["double_click"])
                     return 0
@@ -254,6 +278,25 @@ class TrayIcon:
             nid.uFlags = NIF_TIP
             nid.szTip = text[:127]
             shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+
+    def icon_rect(self):
+        """查询托盘图标的屏幕矩形，失败或图标不可见时返回 None"""
+        if not self.hwnd:
+            return None
+        identifier = NOTIFYICONIDENTIFIER()
+        identifier.cbSize = ctypes.sizeof(NOTIFYICONIDENTIFIER)
+        identifier.hWnd = ctypes.c_void_p(self.hwnd)
+        identifier.uID = 1
+        rect = _RECT()
+        try:
+            if shell32.Shell_NotifyIconGetRect(ctypes.byref(identifier),
+                                               ctypes.byref(rect)) != 0:
+                return None
+        except Exception:
+            return None
+        if rect.right <= rect.left or rect.bottom <= rect.top:
+            return None
+        return rect.left, rect.top, rect.right, rect.bottom
 
     def show_balloon(self, title, message, icon_type=NIIF_INFO, timeout=5000):
         if self.hwnd:

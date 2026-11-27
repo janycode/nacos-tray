@@ -123,7 +123,7 @@ class TrayIcon:
 
     _class_name = "NacosTrayIconWindow"
 
-    def __init__(self, tooltip="Nacos Tray", tk_root=None):
+    def __init__(self, tooltip="Tray Notify Tool", tk_root=None):
         self.tooltip = tooltip
         self.tk_root = tk_root
         self.hwnd = None
@@ -277,7 +277,7 @@ class TrayIcon:
         self.hwnd = user32.CreateWindowExW(
             WS_EX_TOOLWINDOW,
             self._class_name,
-            "Nacos Tray",
+            "Tray Notify Tool",
             0,
             CW_USEDEFAULT, CW_USEDEFAULT, 0, 0,
             None, None, kernel32.GetModuleHandleW(None), None
